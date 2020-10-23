@@ -13,6 +13,12 @@ pub enum ErrorKind {
     Eof,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Endianness {
+    Big,
+    Little,
+}
+
 #[derive(Debug)]
 pub struct Error<'a> {
     pub input: &'a[u8],
@@ -30,7 +36,9 @@ pub type IResult<'a, O> = Result<(&'a[u8], O), Error<'a>>;
 // readers
 pub fn take<'a>(n: usize) -> impl Fn(&'a[u8]) -> IResult<&'a[u8]> {
     move |i:&[u8]| {
-        if i.len() >= n {
+        if i.len() == n {
+            Ok((&[], i))
+        } else if i.len() > n {
             let (a, b) = i.split_at(n);
             Ok((b, a))
         } else {
@@ -51,11 +59,25 @@ pub fn take_until<'a>(pat: &'a[u8]) -> impl Fn(&'a[u8]) -> IResult<&'a[u8]> {
     }
 }
 
-pub fn u32<'a>(be: bool) -> impl Fn(&'a[u8]) -> IResult<u32> {
+pub fn u64<'a>(e: Endianness) -> impl Fn(&'a[u8]) -> IResult<u64> {
     move |i:&[u8]| {
-        if i.len() >= 4 {
-            let (b, a) = i.split_at(4);
-            let u = if be {
+        if let Ok((r, i)) = take(8)(i) {
+            let (i, u1) = u32(e)(i)?;
+            let (i, u2) = u32(e)(i)?;
+            Ok((r, (u1 as u64) << 32 | u2 as u64))
+        } else {
+            Err(Error::new(i, ErrorKind::Integer))
+        }
+    }
+}
+
+pub fn be_u64<'a>(i: &'a[u8]) -> IResult<u64> { u64(Endianness::Big)(i) }
+pub fn le_u64<'a>(i: &'a[u8]) -> IResult<u64> { u64(Endianness::Little)(i) }
+
+pub fn u32<'a>(e: Endianness) -> impl Fn(&'a[u8]) -> IResult<u32> {
+    move |i:&[u8]| {
+        if let Ok((a, b)) = take(4)(i) {
+                let u = if e == Endianness::Big {
                 (b[0] as u32) << 24 | (b[1] as u32) << 16 | (b[2] as u32) << 8 | b[3] as u32
             } else {                                                     
                 (b[3] as u32) << 24 | (b[2] as u32) << 16 | (b[1] as u32) << 8 | b[0] as u32
@@ -67,30 +89,38 @@ pub fn u32<'a>(be: bool) -> impl Fn(&'a[u8]) -> IResult<u32> {
     }
 }
 
-pub fn u16<'a>(be: bool) -> impl Fn(&'a[u8]) -> IResult<u16> {
+pub fn be_u32<'a>(i: &'a[u8]) -> IResult<u32> { u32(Endianness::Big)(i) }
+pub fn le_u32<'a>(i: &'a[u8]) -> IResult<u32> { u32(Endianness::Little)(i) }
+
+pub fn u16<'a>(e: Endianness) -> impl Fn(&'a[u8]) -> IResult<u16> {
     move |i:&[u8]| {
-        if i.len() >= 2 {
-            let (b, a) = i.split_at(2);
-            let u = if be {
+        if let Ok((i, b)) = take(2)(i) {
+            let u = if e == Endianness::Big {
                 (b[0] as u16) << 8 | b[1] as u16
             } else {                                                     
                 (b[1] as u16) << 8 | b[0] as u16
             };
-            Ok((a, u))
+            Ok((i, u))
         } else {
             Err(Error::new(i, ErrorKind::Integer))
         }
     }
 }
 
-pub fn u8<'a>() -> impl Fn(&'a[u8]) -> IResult<u8> {
-    move |i:&[u8]| {
-        if !i.is_empty() {
-            Ok((&i[1..], i[0]))
-        } else {
-            Err(Error::new(i, ErrorKind::Byte))
-        }
+pub fn be_u16<'a>(i: &'a[u8]) -> IResult<u16> { u16(Endianness::Big)(i) }
+pub fn le_u16<'a>(i: &'a[u8]) -> IResult<u16> { u16(Endianness::Little)(i) }
+
+
+pub fn u8<'a>(i:&'a[u8]) -> IResult<u8> {
+    if !i.is_empty() {
+        Ok((&i[1..], i[0]))
+    } else {
+        Err(Error::new(i, ErrorKind::Byte))
     }
+}
+
+pub fn be_u8<'a>(i:&'a[u8]) -> IResult<u8> {
+    u8(i)
 }
 
 // matchers
@@ -161,10 +191,10 @@ pub fn verify<'a, O>(p: impl Fn(&'a[u8]) -> IResult<O>, f: impl Fn(&O) -> bool) 
     }
 }
 
-pub fn map<'a, O1, O2>(p: impl Fn(&'a[u8]) -> IResult<O1>, f: impl Fn(&O1) -> O2) -> impl Fn(&'a[u8]) -> IResult<O2> {
+pub fn map<'a, O1, O2>(p: impl Fn(&'a[u8]) -> IResult<O1>, f: impl Fn(O1) -> O2) -> impl Fn(&'a[u8]) -> IResult<O2> {
     move |i:&[u8]| {
         let (pi, r) = p(i)?;
-        Ok((pi, f(&r)))
+        Ok((pi, f(r)))
     }
 }
 
@@ -248,7 +278,7 @@ mod tests {
     #[test]
     fn test_u32() {
         let data = b"\x11\x22\x33\x44";
-        let r = u32(false)(data);
+        let r = u32(Endianness::Little)(data);
         assert!(r.is_ok());
         let r = r.unwrap();
     }
@@ -256,7 +286,7 @@ mod tests {
     #[test]
     fn test_u16() {
         let data = b"\x11\x22\x33\x44";
-        let r = u16(false)(data);
+        let r = u16(Endianness::Little)(data);
         assert!(r.is_ok());
         let r = r.unwrap();
     }
@@ -319,6 +349,16 @@ mod tests {
     }
 
     #[test]
+    fn test_take_at_end() {
+        let data = b"123";
+        let r = take(3)(data);
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        assert_eq!(r.0, b"");
+        assert_eq!(r.1, b"123");
+    }
+
+    #[test]
     fn test_many_till_eof() {
         let data = b"121212ab";
         let r = many_till(alt2(tag(b"12"), tag(b"ab")), eof)(data);
@@ -331,5 +371,13 @@ mod tests {
         let data = b"121212ab1";
         let r = many_till(alt2(tag(b"12"), tag(b"ab")), eof)(data);
         assert!(r.is_err());
+
+        let data = b"121212ab";
+        let r = many_till(take(2), eof)(data);
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        assert_eq!(r.0, b"");
+        assert_eq!(r.1.0, vec![b"12", b"12", b"12", b"ab"]);
+        assert_eq!(r.1.1, ());
     }
 }
