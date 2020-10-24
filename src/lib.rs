@@ -36,9 +36,7 @@ pub type IResult<'a, O> = Result<(&'a[u8], O), Error<'a>>;
 // readers
 pub fn take<'a>(n: usize) -> impl Fn(&'a[u8]) -> IResult<&'a[u8]> {
     move |i:&[u8]| {
-        if i.len() == n {
-            Ok((&[], i))
-        } else if i.len() > n {
+        if i.len() >= n {
             let (a, b) = i.split_at(n);
             Ok((b, a))
         } else {
@@ -47,7 +45,7 @@ pub fn take<'a>(n: usize) -> impl Fn(&'a[u8]) -> IResult<&'a[u8]> {
     }
 }
 
-pub fn take_until<'a>(pat: &'a[u8]) -> impl Fn(&'a[u8]) -> IResult<&'a[u8]> {
+pub fn u8_take_until<'a>(pat: &'a[u8]) -> impl Fn(&'a[u8]) -> IResult<&'a[u8]> {
     move |i:&[u8]| {
         let p = i.windows(pat.len()).position(|x| x == pat);
         if let Some(p) = p {
@@ -59,12 +57,21 @@ pub fn take_until<'a>(pat: &'a[u8]) -> impl Fn(&'a[u8]) -> IResult<&'a[u8]> {
     }
 }
 
+pub fn take_until<'a>(pat: &'a str) -> impl Fn(&'a[u8]) -> IResult<&'a[u8]> {
+    u8_take_until(pat.as_bytes())   // FIXME: this doesn't seem safe, does it?
+}
+
 pub fn u64<'a>(e: Endianness) -> impl Fn(&'a[u8]) -> IResult<u64> {
     move |i:&[u8]| {
-        if let Ok((r, i)) = take(8)(i) {
-            let (i, u1) = u32(e)(i)?;
-            let (i, u2) = u32(e)(i)?;
-            Ok((r, (u1 as u64) << 32 | u2 as u64))
+        if let Ok((i, r)) = take(8)(i) {
+            let u = if e == Endianness::Big {
+                (r[0] as u64) << 56 | (r[1] as u64) << 48 | (r[2] as u64) << 40 | (r[3] as u64) << 32 |
+                (r[4] as u64) << 24 | (r[5] as u64) << 16 | (r[6] as u64) <<  8 |  r[7] as u64
+            } else {
+                (r[7] as u64) << 56 | (r[6] as u64) << 48 | (r[5] as u64) << 40 | (r[4] as u64) << 32 |
+                (r[3] as u64) << 24 | (r[2] as u64) << 16 | (r[1] as u64) <<  8 |  r[0] as u64
+            };
+            Ok((i, u))
         } else {
             Err(Error::new(i, ErrorKind::Integer))
         }
@@ -109,7 +116,6 @@ pub fn u16<'a>(e: Endianness) -> impl Fn(&'a[u8]) -> IResult<u16> {
 
 pub fn be_u16<'a>(i: &'a[u8]) -> IResult<u16> { u16(Endianness::Big)(i) }
 pub fn le_u16<'a>(i: &'a[u8]) -> IResult<u16> { u16(Endianness::Little)(i) }
-
 
 pub fn u8<'a>(i:&'a[u8]) -> IResult<u8> {
     if !i.is_empty() {
@@ -236,9 +242,20 @@ mod tests {
     }
 
     #[test]
+    fn test_take_too_much() {
+        let data = b"1234567";
+        let r = take(8)(data);
+        assert!(r.is_err());
+
+        let data = b"";
+        let r = take(1)(data);
+        assert!(r.is_err());
+    }
+
+    #[test]
     fn test_take_until() {
         let data = b"123\0456";
-        let r = take_until(b"\0")(data);
+        let r = take_until("\0")(data);
         assert!(r.is_ok());
         let r = r.unwrap();
         assert_eq!(r.0, b"\0456");
