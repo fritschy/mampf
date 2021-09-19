@@ -297,7 +297,7 @@ mod tests {
         let data = b"\x11\x22\x33\x44";
         let r = u32(Endianness::Little)(data);
         assert!(r.is_ok());
-        let r = r.unwrap();
+        let _r = r.unwrap();
     }
 
     #[test]
@@ -305,7 +305,7 @@ mod tests {
         let data = b"\x11\x22\x33\x44";
         let r = u16(Endianness::Little)(data);
         assert!(r.is_ok());
-        let r = r.unwrap();
+        let _r = r.unwrap();
     }
 
     #[test]
